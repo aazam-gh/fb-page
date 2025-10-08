@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Facebook Login + Manage Pages (Client-side Demo)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root { --muted:#6b7280; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 24px; }
+    h1 { margin: 0 0 8px; }
+    .row { margin: 12px 0; }
+    button { padding: 10px 14px; border: 0; border-radius: 8px; cursor: pointer; }
+    #pages { margin-top: 16px; display: grid; gap: 10px; }
+    .page { border: 1px solid #e5e7eb; border-radius: 12px; padding: 12px; display: grid; gap: 8px; }
+    .meta { color: var(--muted); font-size: 12px; }
+    .token { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all; }
+    .grid { display: grid; gap: 8px; grid-template-columns: 1fr auto; align-items: center; }
+    .muted { color: var(--muted); }
+    input, textarea {
+      width: 100%; padding: 10px; border: 1px solid #e5e7eb; border-radius: 8px;
+      font: inherit;
+    }
+    .danger { background:#ef4444; color:white; }
+    .secondary { background:#111827; color:white; }
+    .ghost { background:#f3f4f6; }
+    .ok { color:#16a34a; }
+    .err { color:#b91c1c; }
+    .card { border:1px solid #e5e7eb; border-radius:12px; padding:12px; }
+  </style>
+</head>
+<body>
+  <h1>Connect your Facebook Page</h1>
+  <p class="muted">Client-side demo for testing (tokens stored in <code>localStorage</code>).</p>
+
+  <div class="row">
+    <button id="loginBtn" class="secondary">Continue with Facebook</button>
+    <button id="logoutBtn" class="ghost">Log out</button>
+  </div>
+
+  <div id="status" class="row muted">Checking login status…</div>
+
+  <div class="row card">
+    <strong>Connected User</strong>
+    <div id="userInfo" class="meta">—</div>
+  </div>
+
+  <h2>Your Pages</h2>
+  <div id="pages" class="row"></div>
+
+  <h2>Selected Page</h2>
+  <div id="selected" class="row card">
+    <div id="selectedNone" class="muted">None selected yet.</div>
+    <div id="selectedInfo" style="display:none">
+      <div><strong id="selName"></strong> (<span id="selId"></span>)</div>
+      <div class="meta">Stored token (masked): <span id="selTokenMasked" class="token"></span></div>
+      <div class="row">
+        <button id="clearSelection" class="ghost">Clear selection</button>
+      </div>
+      <div class="row">
+        <strong>Post a test message to this Page (Feed)</strong>
+        <div class="row"><input id="postMsg" placeholder="Hello from my client-side test!" /></div>
+        <button id="postBtn" class="secondary">Publish</button>
+        <div id="postResult" class="row muted">—</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ======== CONFIG ========
+    const APP_ID = '1387744169476507'; // <-- replace me
+    const GRAPH_VERSION = 'v23.0'; // you can bump to the latest supported
+
+    // Permissions required for this demo
+    const PAGE_SCOPES = [
+      'pages_show_list',       // list pages
+      'pages_read_engagement', // read page data
+      'pages_manage_posts'     // publish to page feed (for the demo button)
+      // add 'pages_messaging' etc if you plan to message (requires review)
+    ].join(',');
+
+    // ======== DOM ========
+    const statusEl = document.getElementById('status');
+    const userInfoEl = document.getElementById('userInfo');
+    const pagesEl = document.getElementById('pages');
+    const loginBtn = document.getElementById('loginBtn');
+    const logoutBtn = document.getElementById('logoutBtn');
+
+    const selectedNoneEl = document.getElementById('selectedNone');
+    const selectedInfoEl = document.getElementById('selectedInfo');
+    const selNameEl = document.getElementById('selName');
+    const selIdEl = document.getElementById('selId');
+    const selTokenMaskedEl = document.getElementById('selTokenMasked');
+    const clearSelectionBtn = document.getElementById('clearSelection');
+    const postMsgEl = document.getElementById('postMsg');
+    const postBtn = document.getElementById('postBtn');
+    const postResultEl = document.getElementById('postResult');
+
+    // ======== Local "storage" helpers (client-side only for testing) ========
+    const KEYS = {
+      USER: 'fb_demo_user',
+      PAGE: 'fb_demo_selected_page'
+    };
+
+    function saveUser(u) {
+      localStorage.setItem(KEYS.USER, JSON.stringify(u));
+    }
+    function getUser() {
+      try { return JSON.parse(localStorage.getItem(KEYS.USER)); } catch { return null; }
+    }
+    function saveSelectedPage(p) {
+      localStorage.setItem(KEYS.PAGE, JSON.stringify(p));
+      renderSelected();
+    }
+    function getSelectedPage() {
+      try { return JSON.parse(localStorage.getItem(KEYS.PAGE)); } catch { return null; }
+    }
+    function clearSelectedPage() {
+      localStorage.removeItem(KEYS.PAGE);
+      renderSelected();
+    }
+
+    // ======== FB SDK load ========
+    window.fbAsyncInit = function () {
+      FB.init({
+        appId: APP_ID,
+        cookie: true,
+        xfbml: false,
+        version: GRAPH_VERSION
+      });
+      FB.getLoginStatus(handleStatus);
+    };
+    (function (d, s, id) {
+      if (d.getElementById(id)) return;
+      const js = d.createElement(s); js.id = id;
+      js.src = "https://connect.facebook.net/en_US/sdk.js";
+      const fjs = d.getElementsByTagName(s)[0];
+      fjs.parentNode.insertBefore(js, fjs);
+    }(document, 'script', 'facebook-jssdk'));
+
+    loginBtn.onclick = () => FB.login(handleStatus, { scope: PAGE_SCOPES });
+    logoutBtn.onclick = () => FB.logout(handleStatus);
+    clearSelectionBtn.onclick = () => clearSelectedPage();
+
+    postBtn.onclick = async () => {
+      const page = getSelectedPage();
+      if (!page) return;
+      const message = postMsgEl.value || 'Hello from my client-side test!';
+      // Publish to the Page's feed: POST /{page-id}/feed?message=...&access_token=...
+      postResultEl.textContent = 'Publishing…';
+      try {
+        const resp = await fetch(`https://graph.facebook.com/${GRAPH_VERSION}/${encodeURIComponent(page.id)}/feed`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({
+            message,
+            access_token: page.access_token
+          })
+        });
+        const data = await resp.json();
+        if (resp.ok && data.id) {
+          postResultEl.innerHTML = `✔️ <span class="ok">Published</span> (post id: ${data.id})`;
+        } else {
+          postResultEl.innerHTML = `❌ <span class="err">Failed</span> ${data.error ? ('– ' + data.error.message) : ''}`;
+        }
+      } catch (e) {
+        postResultEl.innerHTML = `❌ <span class="err">Error</span> ${e.message}`;
+      }
+    };
+
+    function handleStatus(response) {
+      if (response.status === 'connected') {
+        statusEl.textContent = 'Logged in.';
+        const userAccessToken = response.authResponse.accessToken;
+        // Get basic user info (non-sensitive for demo UI)
+        FB.api('/me', 'GET', { fields: 'id,name' }, (u) => {
+          if (u && !u.error) {
+            saveUser({ id: u.id, name: u.name, userAccessToken });
+            renderUser();
+            loadPages();
+          } else {
+            userInfoEl.textContent = 'Failed to load user info.';
+          }
+        });
+      } else if (response.status === 'not_authorized') {
+        statusEl.textContent = 'Logged into Facebook, but not this app.';
+        saveUser(null); renderUser(); pagesEl.innerHTML = '';
+      } else {
+        statusEl.textContent = 'Not logged in.';
+        saveUser(null); renderUser(); pagesEl.innerHTML = '';
+      }
+      renderSelected();
+    }
+
+    function renderUser() {
+      const u = getUser();
+      if (!u) { userInfoEl.textContent = '—'; return; }
+      userInfoEl.textContent = `${u.name} (id ${u.id})`;
+    }
+
+    function loadPages() {
+      pagesEl.innerHTML = 'Loading Pages…';
+      FB.api('/me/accounts', 'GET', {}, (res) => {
+        if (res && !res.error) {
+          const pages = res.data || [];
+          if (!pages.length) {
+            pagesEl.innerHTML = '<div class="muted">No pages found. Make sure this Facebook user manages at least one Page and that your app has the required permissions.</div>';
+            return;
+          }
+          pagesEl.innerHTML = '';
+          pages.forEach(p => {
+            const hasToken = !!p.access_token;
+            const el = document.createElement('div');
+            el.className = 'page';
+            const tokenMasked = hasToken ? maskToken(p.access_token) : '(no token in response—permission missing)';
+            el.innerHTML = `
+              <div class="grid">
+                <div>
+                  <div><strong>${p.name}</strong></div>
+                  <div class="meta">ID: ${p.id}</div>
+                  <div class="meta">Token: <span class="token">${tokenMasked}</span></div>
+                </div>
+                <div>
+                  <button ${hasToken ? '' : 'disabled'} data-id="${p.id}" data-name="${p.name}">Connect</button>
+                </div>
+              </div>
+            `;
+            el.querySelector('button')?.addEventListener('click', () => {
+              // Store selection locally (client-side only for testing)
+              saveSelectedPage({ id: p.id, name: p.name, access_token: p.access_token });
+              alert(`Connected: ${p.name}`);
+            });
+            pagesEl.appendChild(el);
+          });
+        } else {
+          console.error(res?.error);
+          pagesEl.innerHTML = `<div class="err">Failed to load Pages${res?.error?.message ? (': ' + res.error.message) : ''}</div>`;
+        }
+      });
+    }
+
+    function renderSelected() {
+      const selected = getSelectedPage();
+      if (!selected) {
+        selectedNoneEl.style.display = '';
+        selectedInfoEl.style.display = 'none';
+        return;
+      }
+      selectedNoneEl.style.display = 'none';
+      selectedInfoEl.style.display = '';
+      selNameEl.textContent = selected.name;
+      selIdEl.textContent = selected.id;
+      selTokenMaskedEl.textContent = maskToken(selected.access_token);
+    }
+
+    function maskToken(t) {
+      if (!t) return '';
+      if (t.length <= 12) return '••••';
+      return t.slice(0, 6) + '...' + t.slice(-6);
+    }
+  </script>
+</body>
+</html>
