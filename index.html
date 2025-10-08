@@ -45,6 +45,11 @@
   </div>
 
   <h2>Your Pages</h2>
+  <div class="row">
+    <button id="checkPerms" class="ghost">Check granted permissions</button>
+    <button id="rerequest" class="ghost">Re-request required permissions</button>
+  </div>
+  <pre id="debugOut" class="row" style="white-space:pre-wrap;background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:10px;"></pre>
   <div id="pages" class="row"></div>
 
   <h2>Selected Page</h2>
@@ -94,6 +99,9 @@
     const postMsgEl = document.getElementById('postMsg');
     const postBtn = document.getElementById('postBtn');
     const postResultEl = document.getElementById('postResult');
+    const checkPermsBtn = document.getElementById('checkPerms');
+    const rerequestBtn = document.getElementById('rerequest');
+    const debugOut = document.getElementById('debugOut');
 
     // ======== Local "storage" helpers (client-side only for testing) ========
     const KEYS = {
@@ -140,6 +148,20 @@
     loginBtn.onclick = () => FB.login(handleStatus, { scope: PAGE_SCOPES });
     logoutBtn.onclick = () => logout();
     clearSelectionBtn.onclick = () => clearSelectedPage();
+
+    // Debug button handlers
+    checkPermsBtn.onclick = () => {
+      FB.api('/me/permissions', (res) => {
+        debugOut.textContent = JSON.stringify(res, null, 2);
+      });
+    };
+
+    rerequestBtn.onclick = () => {
+      FB.login(handleStatus, {
+        scope: PAGE_SCOPES,
+        auth_type: 'rerequest'
+      });
+    };
 
     function logout() {
       FB.logout(() => {
@@ -211,36 +233,41 @@
 
     function loadPages() {
       pagesEl.innerHTML = 'Loading Pages…';
-      FB.api('/me/accounts', 'GET', {}, (res) => {
+      FB.api('/me/accounts', 'GET', { fields: 'id,name,tasks,access_token' }, (res) => {
         if (res && !res.error) {
           const pages = res.data || [];
           if (!pages.length) {
-            pagesEl.innerHTML = '<div class="muted">No pages found. Make sure this Facebook user manages at least one Page and that your app has the required permissions.</div>';
+            pagesEl.innerHTML = `
+              <div class="muted">
+                No pages found. Checks:
+                <ol>
+                  <li>Does this Facebook profile actually manage a Page?</li>
+                  <li>Is <code>pages_show_list</code> granted? (Use "Check granted permissions")</li>
+                  <li>If the Page is under Business Manager, does your profile have the <b>Manage</b> task?</li>
+                  <li>Are you testing as an <b>App Admin/Developer/Tester</b> while the app is in Development mode?</li>
+                </ol>
+              </div>`;
             return;
           }
           pagesEl.innerHTML = '';
           pages.forEach(p => {
-            const hasToken = !!p.access_token;
+            const tokenMasked = p.access_token ? maskToken(p.access_token) : '(no access_token returned)';
             const el = document.createElement('div');
             el.className = 'page';
-            const tokenMasked = hasToken ? maskToken(p.access_token) : '(no token in response—permission missing)';
             el.innerHTML = `
-              <div class="grid">
-                <div>
-                  <div><strong>${p.name}</strong></div>
-                  <div class="meta">ID: ${p.id}</div>
-                  <div class="meta">Token: <span class="token">${tokenMasked}</span></div>
-                </div>
-                <div>
-                  <button ${hasToken ? '' : 'disabled'} data-id="${p.id}" data-name="${p.name}">Connect</button>
-                </div>
+              <div>
+                <div><strong>${p.name}</strong></div>
+                <div class="meta">ID: ${p.id}</div>
+                <div class="meta">Tasks: ${Array.isArray(p.tasks) ? p.tasks.join(', ') : '-'}</div>
+                <div class="meta">Token: <span class="token">${tokenMasked}</span></div>
+              </div>
+              <div>
+                <button ${p.access_token ? '' : 'disabled'}>Connect</button>
               </div>
             `;
-            el.querySelector('button')?.addEventListener('click', () => {
-              // Store selection locally (client-side only for testing)
-              saveSelectedPage({ id: p.id, name: p.name, access_token: p.access_token });
-              alert(`Connected: ${p.name}`);
-            });
+            el.querySelector('button')?.addEventListener('click', () =>
+              saveSelectedPage({ id: p.id, name: p.name, access_token: p.access_token })
+            );
             pagesEl.appendChild(el);
           });
         } else {
