@@ -138,8 +138,20 @@
     }(document, 'script', 'facebook-jssdk'));
 
     loginBtn.onclick = () => FB.login(handleStatus, { scope: PAGE_SCOPES });
-    logoutBtn.onclick = () => FB.logout(handleStatus);
+    logoutBtn.onclick = () => logout();
     clearSelectionBtn.onclick = () => clearSelectedPage();
+
+    function logout() {
+      FB.logout(() => {
+        // Facebook logs out, now clear local data
+        localStorage.removeItem(KEYS.USER);
+        localStorage.removeItem(KEYS.PAGE);
+        renderUser();
+        renderSelected();
+        pagesEl.innerHTML = '';
+        statusEl.textContent = 'Logged out.';
+      });
+    }
 
     postBtn.onclick = async () => {
       const page = getSelectedPage();
